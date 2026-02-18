@@ -272,8 +272,12 @@ static bool sqlite_sram_insert(sqlite3 *db, const std::vector<uint8_t> &data)
 
 	if (ok)
 	{
-		char sql[192] = {};
-		snprintf(sql, sizeof(sql), "DELETE FROM snapshots WHERE id <= (SELECT IFNULL(MAX(id), 0) - %d FROM snapshots);", SQLITE_SRAM_HISTORY_LIMIT);
+		char sql[320] = {};
+		snprintf(sql, sizeof(sql),
+			"DELETE FROM snapshots "
+			"WHERE tag IS NULL "
+			"AND id NOT IN (SELECT id FROM snapshots WHERE tag IS NULL ORDER BY id DESC LIMIT %d);",
+			SQLITE_SRAM_HISTORY_LIMIT);
 		if (!sqlite_sram_exec(db, sql)) ok = false;
 	}
 	if (ok && !sqlite_sram_exec(db, "COMMIT;")) ok = false;

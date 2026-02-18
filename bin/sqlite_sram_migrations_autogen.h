@@ -14,6 +14,9 @@ CREATE TABLE IF NOT EXISTS snapshots (
 	sram BLOB NOT NULL
 );
 )__MIG__"},
+	{"202602180002_add_snapshots_tag.sql", R"__MIG__(
+ALTER TABLE snapshots ADD COLUMN tag TEXT DEFAULT NULL;
+)__MIG__"},
 };
 
 const size_t g_sqlite_sram_migrations_count = sizeof(g_sqlite_sram_migrations) / sizeof(g_sqlite_sram_migrations[0]);
