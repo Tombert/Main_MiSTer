@@ -3,11 +3,13 @@
 #include <time.h>
 #include <limits.h>
 #include <ctype.h>
+#include <algorithm>
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <vector>
 
 #include "support/sqlite_sram/sqlite_sram.h"
+#include "support/sqlite_sram/migrations.h"
 
 #include "cfg.h"
 #include "hardware.h"
@@ -79,12 +81,98 @@ static bool sqlite_sram_exec(sqlite3 *db, const char *sql)
 	return true;
 }
 
-static bool sqlite_sram_schema_has_crc32(sqlite3 *db)
+static bool sqlite_sram_migration_applied(sqlite3 *db, const char *name, bool *applied)
 {
+	if (!db || !name || !applied) return false;
+	*applied = false;
+
 	sqlite3_stmt *stmt = nullptr;
-	int rc = sqlite3_prepare_v2(db, "SELECT id, ts_ms, crc32, sram FROM snapshots LIMIT 1;", -1, &stmt, 0);
-	if (rc != SQLITE_OK) return false;
+	if (sqlite3_prepare_v2(db, "SELECT 1 FROM schema_migrations WHERE name = ?1 LIMIT 1;", -1, &stmt, 0) != SQLITE_OK)
+	{
+		return false;
+	}
+
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
+	const int rc = sqlite3_step(stmt);
+	if (rc == SQLITE_ROW) *applied = true;
+	else if (rc != SQLITE_DONE)
+	{
+		sqlite3_finalize(stmt);
+		return false;
+	}
+
 	sqlite3_finalize(stmt);
+	return true;
+}
+
+static bool sqlite_sram_record_migration(sqlite3 *db, const char *name)
+{
+	if (!db || !name) return false;
+
+	sqlite3_stmt *stmt = nullptr;
+	if (sqlite3_prepare_v2(db, "INSERT INTO schema_migrations(name, applied_ts_ms) VALUES(?1, ?2);", -1, &stmt, 0) != SQLITE_OK)
+	{
+		return false;
+	}
+
+	sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
+	sqlite3_bind_int64(stmt, 2, sqlite_sram_timestamp_ms());
+	const int rc = sqlite3_step(stmt);
+	sqlite3_finalize(stmt);
+	return rc == SQLITE_DONE;
+}
+
+static bool sqlite_sram_apply_migrations(sqlite3 *db)
+{
+	if (!db) return false;
+
+	if (!sqlite_sram_exec(db, "CREATE TABLE IF NOT EXISTS schema_migrations (name TEXT PRIMARY KEY, applied_ts_ms INTEGER NOT NULL);")) return false;
+
+	std::vector<const sqlite_sram_migration_t*> ordered;
+	ordered.reserve(g_sqlite_sram_migrations_count);
+	for (size_t i = 0; i < g_sqlite_sram_migrations_count; i++)
+	{
+		ordered.push_back(&g_sqlite_sram_migrations[i]);
+	}
+
+	std::sort(ordered.begin(), ordered.end(), [](const sqlite_sram_migration_t *a, const sqlite_sram_migration_t *b)
+	{
+		return strcmp(a->name, b->name) < 0;
+	});
+
+	for (size_t i = 1; i < ordered.size(); i++)
+	{
+		if (!strcmp(ordered[i - 1]->name, ordered[i]->name))
+		{
+			fprintf(stderr, "SQLite SRAM migration error: duplicate migration name %s\n", ordered[i]->name);
+			return false;
+		}
+	}
+
+	for (const sqlite_sram_migration_t *migration : ordered)
+	{
+		bool applied = false;
+		if (!sqlite_sram_migration_applied(db, migration->name, &applied))
+		{
+			fprintf(stderr, "SQLite SRAM migration error: failed to query %s\n", migration->name);
+			return false;
+		}
+		if (applied) continue;
+
+		if (!sqlite_sram_exec(db, "BEGIN IMMEDIATE;")) return false;
+		bool ok = sqlite_sram_exec(db, migration->sql);
+		if (ok) ok = sqlite_sram_record_migration(db, migration->name);
+		if (ok) ok = sqlite_sram_exec(db, "COMMIT;");
+		if (!ok)
+		{
+			sqlite_sram_exec(db, "ROLLBACK;");
+			fprintf(stderr, "SQLite SRAM migration error: failed applying %s\n", migration->name);
+			return false;
+		}
+
+		fprintf(stderr, "SQLite SRAM migration applied: %s\n", migration->name);
+	}
+
 	return true;
 }
 
@@ -95,15 +183,7 @@ static bool sqlite_sram_prepare_db(sqlite3 *db)
 	if (!sqlite_sram_exec(db, "PRAGMA auto_vacuum=NONE;")) return false;
 	if (!sqlite_sram_exec(db, "PRAGMA temp_store=MEMORY;")) return false;
 	if (!sqlite_sram_exec(db, "PRAGMA journal_size_limit=1048576;")) return false;
-
-	if (!sqlite_sram_exec(db, "CREATE TABLE IF NOT EXISTS snapshots (id INTEGER PRIMARY KEY, ts_ms INTEGER NOT NULL, crc32 INTEGER NOT NULL, sram BLOB NOT NULL);")) return false;
-	if (!sqlite_sram_schema_has_crc32(db))
-	{
-		fprintf(stderr, "SQLite SRAM schema mismatch: recreating snapshots table with CRC32.\n");
-		if (!sqlite_sram_exec(db, "DROP TABLE IF EXISTS snapshots;")) return false;
-		if (!sqlite_sram_exec(db, "CREATE TABLE snapshots (id INTEGER PRIMARY KEY, ts_ms INTEGER NOT NULL, crc32 INTEGER NOT NULL, sram BLOB NOT NULL);")) return false;
-	}
-	return true;
+	return sqlite_sram_apply_migrations(db);
 }
 
 static bool sqlite_sram_open_db(const char *db_path, sqlite3 **db)
@@ -420,6 +500,22 @@ static bool sqlite_sram_migrate_legacy_save(const char *save_path, const char *d
 	return true;
 }
 
+static bool sqlite_sram_run_db_migrations(const char *db_path)
+{
+	if (!db_path || !db_path[0]) return false;
+	if (!FileExists(db_path, 0)) return true;
+
+	sqlite3 *db = nullptr;
+	if (!sqlite_sram_open_db(db_path, &db))
+	{
+		fprintf(stderr, "SQLite SRAM migration warning: failed to apply migrations to %s\n", db_path);
+		return false;
+	}
+
+	sqlite3_close(db);
+	return true;
+}
+
 static void sqlite_sram_configure_slot(uint8_t slot, fileTYPE *img, const char *save_path)
 {
 	if (slot >= SQLITE_SRAM_MAX_SLOTS) return;
@@ -664,6 +760,11 @@ bool sqlite_sram_mount_virtual(uint8_t slot, const char *save_path, int pre_size
 		return false;
 	}
 	snprintf(img->path, sizeof(img->path), "%s", tmp_path);
+
+	if (!sqlite_sram_run_db_migrations(g_slots[slot].db_path))
+	{
+		fprintf(stderr, "SQLite SRAM warning: DB migration check failed for \"%s\".\n", save_path);
+	}
 
 	if (!sqlite_sram_migrate_legacy_save(save_path, g_slots[slot].db_path))
 	{

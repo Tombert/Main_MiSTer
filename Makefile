@@ -27,6 +27,7 @@ INCLUDE += -I./lib/libchdr/include
 INCLUDE += -I./lib/bluetooth
 INCLUDE += -I./lib/serial_server/library
 INCLUDE += -I./third_party/sqlite
+INCLUDE += -I./$(BUILDDIR)
 
 BUILDDIR = bin
 
@@ -46,6 +47,10 @@ CPP_SRC = $(wildcard *.cpp) \
           $(wildcard ./support/*/*.cpp)
 
 IMG =     $(wildcard *.png)
+SQLITE_SRAM_MIGRATIONS = $(wildcard ./support/sqlite_sram/migrations/*.sql)
+SQLITE_SRAM_MIGRATIONS_HDR = $(BUILDDIR)/sqlite_sram_migrations_autogen.h
+SQLITE_SRAM_MIGRATIONS_OBJ = $(BUILDDIR)/./support/sqlite_sram/migrations.cpp.o
+SQLITE_SRAM_MIGRATIONS_DEP = $(BUILDDIR)/./support/sqlite_sram/migrations.cpp.d
 
 IMLIB2_LIB  = -Llib/imlib2 -lfreetype -lbz2 -lpng16 -lz -lImlib2
 
@@ -91,6 +96,13 @@ $(BUILDDIR)/%.cpp.o: %.cpp
 $(BUILDDIR)/%.png.o: %.png
 	$(Q)$(info $<)
 	$(Q)$(LD) -r -b binary -o $@ $< 2>&1 | $(OUTPUT_FILTER)
+
+$(SQLITE_SRAM_MIGRATIONS_HDR): support/sqlite_sram/gen_migrations_header.sh $(SQLITE_SRAM_MIGRATIONS)
+	@mkdir -p $(dir $@)
+	$(Q)./support/sqlite_sram/gen_migrations_header.sh $@
+
+$(SQLITE_SRAM_MIGRATIONS_OBJ): $(SQLITE_SRAM_MIGRATIONS_HDR)
+$(SQLITE_SRAM_MIGRATIONS_DEP): $(SQLITE_SRAM_MIGRATIONS_HDR)
 
 ifneq ($(MAKECMDGOALS), clean)
 -include $(DEP)
