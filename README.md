@@ -56,4 +56,6 @@ By utilizing SQLite's ACID guarantees and Copy-on-Write semantics, SRAM backups 
 
 
 
+# AI Disclaimer
 
+I make liberal use of OpenAI's Codex when working on features.  If that's a problem for you then don't use this. 
