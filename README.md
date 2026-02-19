@@ -8,9 +8,10 @@ Fork of the [Main_MiSTer](https://github.com/MiSTer-devel/Main_MiSTer) repo.
 # Why Fork MiSTer? What did they ever do to you????
 
 
-I have strong disagreements with the project management for the MiSTer project.  I realize that it is their project and as such they are allowed to run their project as terribly as they'd like but I found working with their maintainers exceptionally irritating.  
+I have strong disagreements with upstream governance and project direction. I realize it’s their project and they’re free to run it however they like, but the current approach isn’t what I want to build around.
 
-I have features I want to add and I don't want to deal with Sorg's enormous and largely undeserved ego. 
+If upstream works for you, feel free to use their build instead.
+
 
 # Ok what features? 
 
