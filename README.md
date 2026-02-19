@@ -34,7 +34,7 @@ This is an issue with the *current* `Main_MiSTer` project: if the save is interr
 
 I do not believe it's possible to make exFAT safe purely with userspace tools, but we can do things to minimize the risks and potential damage and get *pretty close* to perfect.  For example, we can treat the saves as [Append-only](https://en.wikipedia.org/wiki/Append-only) by creating new file with timestamps and a checksum upon each SRAM write, and if that's corrupted revert back to the previous safe write. 
 
-In a hand-wavey way, this is getting into how journaling works. I could of course write my own and end up creating a journaling system or Copy-on-Write system, but t that point I think it makes sense to use a library that has these semantics out of the box, with most edge cases already worked out. SQLite does exactly that.
+In a hand-wavey way, this is getting into how journaling works. I could of course write my own and end up creating a journaling system or Copy-on-Write system, but at that point I think it makes sense to use a library that has these semantics out of the box, with most edge cases already worked out. SQLite does exactly that.
 
 
 By utilizing SQLite's ACID guarantees and Copy-on-Write semantics, SRAM backups are "all or nothing".  Either the writing of the save was completely successful, or the write doesn't happen at all.   In that case, we revert to the last valid save, which is fine because we've been saving periodically so we would only lose N seconds of progress (where N is the interval set for automatic SRAM writing). 
